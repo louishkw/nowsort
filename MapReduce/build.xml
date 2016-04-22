@@ -1,0 +1,23 @@
+<project default="jar">
+  <!-- Hadoop configuration -->
+  <property name="hadoop.dir" value="/u/cs258/hadoop-2.6.0"/>
+  <path id="hadoop.cp">
+      <fileset dir="${hadoop.dir}" includes="**/*.jar"/>
+  </path>
+
+  <target name="clean">
+    <delete dir="build"/>
+  </target>
+
+  <target name="compile">
+    <mkdir dir="build/classes"/>
+    <javac  includeantruntime="false"
+           deprecation="true"
+           srcdir="src" destdir="build/classes"
+           classpathref="hadoop.cp"/>
+  </target>
+
+  <target name="jar" depends="compile">
+    <jar destfile="build/Hadoop.jar" basedir="build/classes" />
+  </target>
+</project>

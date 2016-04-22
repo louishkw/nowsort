@@ -1,2 +1,4 @@
 nowsort
 *.o
+*.swp
+build/

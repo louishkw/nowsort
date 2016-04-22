@@ -1,7 +1,0 @@
-setenv HADOOP_HOME /u/cs258/hadoop
-setenv HDFS_JAVA /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.72-1.b15.fc22.x86_64/jre/lib/amd64/server
-setenv HDFS_HOME ${HADOOP_HOME}/lib/native
-
-setenv PATH ${HADOOP_HOME}/bin:${PATH}
-setenv LD_LIBRARY_PATH ${HDFS_JAVA}:${HDFS_HOME}:{LD_LIBRARY_PATH}
-setenv CLASSPATH "`hadoop classpath --glob`"

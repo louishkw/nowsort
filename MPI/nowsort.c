@@ -34,6 +34,11 @@ int rank;
  */
 void read_data(hdfsFS fs, char *path, unsigned char *data, int data_size) {
     hdfsFile data_f = hdfsOpenFile(fs, path, O_RDONLY, 0, 0, 0);
+    if (data_f == NULL) {
+        fprintf(stderr, "%d: failed to open %s for reading\n", rank, path);
+        MPI_Finalize();
+        exit(1);
+    }
 
     hdfsRead(fs, data_f, data, data_size);
 
@@ -45,6 +50,11 @@ void read_data(hdfsFS fs, char *path, unsigned char *data, int data_size) {
  */
 void write_data(hdfsFS fs, char *path, unsigned char *data, int data_size) {
     hdfsFile data_f = hdfsOpenFile(fs, path, O_WRONLY, 0, 0, 0);
+    if (data_f == NULL) {
+        fprintf(stderr, "%d: failed to open %s for writing\n", rank, path);
+        MPI_Finalize();
+        exit(1);
+    }
 
     hdfsWrite(fs, data_f, data, data_size);
 
@@ -124,7 +134,7 @@ void sort(unsigned char *data, int nrecs) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
+    if (argc < 3) {
         fprintf(stderr, "nowsort <file> <nrecords>\n");
         exit(1);
     }
@@ -140,6 +150,11 @@ int main(int argc, char **argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     hdfsFS fs = hdfsConnect("default", 0);
+    if (fs == NULL) {
+        fprintf(stderr, "%d: failed to connect to HDFS\n", rank);
+        MPI_Finalize();
+        exit(1);
+    }
 
     /* Read data */
     read_data(fs, in_path, data, data_size);
