@@ -3,7 +3,7 @@
  * Assignment: CSC 258 Project (Spring 2016)
  *
  * Description:
- * 
+ *   A MapReduce implementation of the NowSort parallel external sorting algorithm.
  */
 
 import java.io.IOException;
@@ -14,6 +14,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
@@ -26,11 +27,13 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 public class Nowsort {
     public final static int KEY_SIZE = 10;
     public final static int REC_SIZE = 100;
-    public final static int nBits = 16;
+    public final static int nBits = 4;
 
     /*
      * BucketMapper 
      *   Sorts each record into a bucket based on the first n-bits of the key.
+     *   in:  record_num => record
+     *   out: bucket => record
      */
     public static class BucketMapper 
             extends Mapper<LongWritable, BytesWritable, LongWritable, BytesWritable> {
@@ -52,35 +55,64 @@ public class Nowsort {
     /*
      * SortReducer
      *   Sorts each bucket by comparing the 10-byte keys.
+     *   in:  bucket => records
+     *   out: null => record
      */
     public static class SortReducer 
-            extends Reducer<LongWritable, BytesWritable, LongWritable, BytesWritable> {
+            extends Reducer<LongWritable, BytesWritable, NullWritable, Text> {
+        Text outRecord = new Text();
+
         public void reduce(LongWritable bucket, Iterable<BytesWritable> records, Context context)
                 throws IOException, InterruptedException {
-            ArrayList<BytesWritable> sortedRecords = new ArrayList<>();
+            ArrayList<byte[]> sortedRecords = new ArrayList<>();
 
             /* Copy records */
             for (BytesWritable record : records) {
-                sortedRecords.add(record);
+                sortedRecords.add(record.copyBytes());
             }
 
             /* Sort records */
             sort(sortedRecords);
 
             /* Output sorted records */
-            for (BytesWritable record : sortedRecords) {
-                context.write(bucket, record);
+            for (byte[] record : sortedRecords) {
+                /* Convert binary to text */
+                outRecord.set(record);
+                context.write(NullWritable.get(), outRecord);
             }
         } 
 
-        private void sort(ArrayList<BytesWritable> records) {
+        /*
+         * compareRec()
+         *   Compares the keys of two records byte-by-byte and returns -1, 1, or 0 if rec1 is 
+         *   correspondingly less than, greater than, or equal to rec2.
+         */
+        private int compareRec(byte[] rec1, byte[] rec2) {
+            for (int i = 0; i < KEY_SIZE; i++) {
+                /* Have to cast to int because bytes are signed in Java */
+                int k1 = (int) (rec1[i] & 0xFF);
+                int k2 = (int) (rec2[i] & 0xFF);
+
+                if (k1 < k2) {
+                    return -1;
+                }
+                else if (k1 > k2) {
+                    return 1;
+                }
+            }
+
+            return 0;
+        }
+        
+        /*
+         * sort()
+         *   Sorts a list of records by their keys using insertion sort.
+         */
+        private void sort(ArrayList<byte[]> records) {
             for (int i = 0; i < records.size(); i++) {
                 for (int j = i; j > 0; j--) {
-                    ByteBuffer key1 = ByteBuffer.wrap(records.get(j - 1).getBytes(), 0, KEY_SIZE);
-                    ByteBuffer key2 = ByteBuffer.wrap(records.get(j).getBytes(), 0, KEY_SIZE);
-
-                    if (key1.compareTo(key2) > 0) {
-                        BytesWritable tmp = records.get(j - 1);
+                    if (compareRec(records.get(j - 1), records.get(j)) > 0) {
+                        byte[] tmp = records.get(j - 1);
                         records.set(j - 1, records.get(j));
                         records.set(j, tmp);
                     }
@@ -98,12 +130,13 @@ public class Nowsort {
             System.exit(1);
         }
         Path inPath = new Path(args[0]);
-        Path outPath = new Path("out.dat");
+        Path outPath = new Path("out");
         int nRecs = new Integer(args[1]); // May not need this
         int nBuckets = (1 << nBits);
         int nBucketPerReducer = 1;
 
         Configuration conf = new Configuration();
+        conf.setInt(FixedLengthInputFormat.FIXED_RECORD_LENGTH, REC_SIZE);
 
         Job job = Job.getInstance(conf, "nowsort");
         job.setJarByClass(Nowsort.class);
@@ -111,20 +144,20 @@ public class Nowsort {
         //job.setCombinerClass(SortReducer.class);
         job.setReducerClass(SortReducer.class);
         
-        job.setOutputKeyClass(LongWritable.class);
-        job.setOutputValueClass(BytesWritable.class);
+        job.setOutputKeyClass(NullWritable.class);
+        job.setOutputValueClass(Text.class);
         job.setMapOutputKeyClass(LongWritable.class);
         job.setMapOutputValueClass(BytesWritable.class);
 
         job.setInputFormatClass(FixedLengthInputFormat.class);
-        job.setOutputFormatClass(TextOutputFormat.class); // Probably need to change this
-        
-        FixedLengthInputFormat.setRecordLength(conf, REC_SIZE);
+        job.setOutputFormatClass(TextOutputFormat.class); // TODO: may need to make a custom
+                                                          // output format to avoid newlines
 
         FileInputFormat.addInputPath(job, inPath);
         FileOutputFormat.setOutputPath(job, outPath);
 
         //FileInputFormat.setMaxInputSplitSize(job, /* splitsize */);
+        // TODO: may need to make another pass to combine files, or just use -getmerge
         job.setNumReduceTasks(nBuckets / nBucketPerReducer);
 
         job.waitForCompletion(true);
