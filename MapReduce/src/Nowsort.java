@@ -6,11 +6,14 @@
  *   A MapReduce implementation of the NowSort parallel external sorting algorithm.
  */
 
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.LongWritable;
@@ -18,16 +21,16 @@ import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.input.FixedLengthInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
-import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 
 public class Nowsort {
     public final static int KEY_SIZE = 10;
     public final static int REC_SIZE = 100;
-    public final static int nBits = 4;
 
     /*
      * BucketMapper 
@@ -41,6 +44,8 @@ public class Nowsort {
 
         public void map(LongWritable key, BytesWritable record, Context context) 
                 throws IOException, InterruptedException {
+            int nBits = context.getConfiguration().getInt("nBits", 0);
+
             /* Extract the key from the record */
             ByteBuffer data = ByteBuffer.wrap(record.getBytes(), 0, KEY_SIZE);
 
@@ -60,6 +65,7 @@ public class Nowsort {
      */
     public static class SortReducer 
             extends Reducer<LongWritable, BytesWritable, NullWritable, Text> {
+        NullWritable outKey = NullWritable.get();
         Text outRecord = new Text();
 
         public void reduce(LongWritable bucket, Iterable<BytesWritable> records, Context context)
@@ -78,7 +84,7 @@ public class Nowsort {
             for (byte[] record : sortedRecords) {
                 /* Convert binary to text */
                 outRecord.set(record);
-                context.write(NullWritable.get(), outRecord);
+                context.write(outKey, outRecord);
             }
         } 
 
@@ -124,24 +130,61 @@ public class Nowsort {
         }
     }
 
+    /*
+     * RecordOutputFormat
+     *   Custom output format that writes records with no key and no newline.
+     */
+    private static class RecordOutputFormat 
+            extends FileOutputFormat<NullWritable, Text> {
+        public RecordWriter<NullWritable, Text> getRecordWriter(TaskAttemptContext job)
+                throws IOException {
+            Path file = this.getDefaultWorkFile(job, ".dat");
+            
+            FileSystem fs = file.getFileSystem(job.getConfiguration());
+            FSDataOutputStream fileOut = fs.create(file, job);
+
+            return new RecordRecordWriter(fileOut);
+        }
+    }
+
+    /*
+     * RecordRecordWriter
+     *   Custom record writer that writes records with no key and no newline.
+     */
+    private static class RecordRecordWriter
+            extends RecordWriter<NullWritable, Text> {
+        private DataOutputStream out;
+
+        public RecordRecordWriter(DataOutputStream stream) {
+            this.out = stream;
+        }
+
+        public void close(TaskAttemptContext context) throws IOException {
+            out.close();
+        }
+
+        public void write(NullWritable key, Text record) throws IOException {
+            out.write(record.getBytes(), 0, record.getLength());
+        }
+    }
+
     public static void main(String[] args) throws Exception {
-        if (args.length < 2) {
-            System.err.println("java Nowsort <file> <nrecords>");
+        if (args.length < 3) {
+            System.err.println("java Nowsort <file> <outdir> <nBits>");
             System.exit(1);
         }
         Path inPath = new Path(args[0]);
-        Path outPath = new Path("out");
-        int nRecs = new Integer(args[1]); // May not need this
+        Path outPath = new Path(args[1]);
+        int nBits = new Integer(args[2]); 
         int nBuckets = (1 << nBits);
-        int nBucketPerReducer = 1;
 
         Configuration conf = new Configuration();
         conf.setInt(FixedLengthInputFormat.FIXED_RECORD_LENGTH, REC_SIZE);
+        conf.setInt("nBits", nBits);
 
         Job job = Job.getInstance(conf, "nowsort");
         job.setJarByClass(Nowsort.class);
         job.setMapperClass(BucketMapper.class);
-        //job.setCombinerClass(SortReducer.class);
         job.setReducerClass(SortReducer.class);
         
         job.setOutputKeyClass(NullWritable.class);
@@ -150,15 +193,14 @@ public class Nowsort {
         job.setMapOutputValueClass(BytesWritable.class);
 
         job.setInputFormatClass(FixedLengthInputFormat.class);
-        job.setOutputFormatClass(TextOutputFormat.class); // TODO: may need to make a custom
-                                                          // output format to avoid newlines
+        job.setOutputFormatClass(RecordOutputFormat.class);
 
         FileInputFormat.addInputPath(job, inPath);
         FileOutputFormat.setOutputPath(job, outPath);
 
         //FileInputFormat.setMaxInputSplitSize(job, /* splitsize */);
         // TODO: may need to make another pass to combine files, or just use -getmerge
-        job.setNumReduceTasks(nBuckets / nBucketPerReducer);
+        job.setNumReduceTasks(nBuckets);
 
         job.waitForCompletion(true);
     }
